@@ -54,7 +54,7 @@ class VanillaRNN(SequentialModel):
         optimizer = Adam(learning_rate=config['lr'], beta_1=0.9, beta_2=0.999,
                          amsgrad=False)
         model.compile(optimizer=optimizer,
-                      loss=CategoricalCrossentropy(from_logits=True),
+                      loss=CategoricalCrossentropy(),
                       metrics=['accuracy'])
         model.summary()
         print("Model compiled.")
@@ -301,7 +301,8 @@ class CNN4LayerGRU(SequentialModel):
 
         model.add(Flatten())
     
-        model.add(Reshape((200, 4))) 
+        b = int(model.output.shape[1] / 200)
+        model.add(Reshape((200, b))) 
         model.add(GRU(44, kernel_regularizer=L1L2(l1=0, l2=0.1), return_sequences=True))
         model.add(Dropout(0.2))
         model.add(Flatten())
