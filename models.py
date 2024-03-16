@@ -1,14 +1,14 @@
 from keras.layers import Dense, Activation, Dropout, Conv1D, LSTM, MaxPooling1D
 from keras.layers import Flatten, Conv2D, MaxPooling2D, GRU, BatchNormalization
-from keras.layers import Conv3D, MaxPool3D, Reshape, Input, AveragePooling2D
+from keras.layers import Bidirectional, Reshape, Input, AveragePooling2D, SpatialDropout2D, Permute, Lambda
 from keras.models import Sequential, load_model, Model
 from keras.callbacks import EarlyStopping, ModelCheckpoint
-from keras.optimizers.legacy import Adam
+from keras.optimizers import Adam
 from keras.regularizers import l2
 from keras.losses import CategoricalCrossentropy
 from utils import *
-import tensorflow as tf
 from tensorflow.keras.regularizers import L1L2
+import tensorflow.keras.backend as K
 
 
 class SequentialModel:
@@ -41,11 +41,12 @@ class VanillaRNN(SequentialModel):
     def build_model(self, config):
         # replace hardcoded dimensions with config dictionary
         model = self.model
+        model.add(Reshape((25, 10), input_shape=(config['input_shape'])))
         if config['LSTM']:
-            model.add(LSTM(22, input_shape=(config['input_shape'][0], config['input_shape'][1]), return_sequences=True))
+            model.add(LSTM(25, input_shape=(config['input_shape']), return_sequences=True))
         else:
-            model.add(GRU(22, input_shape=(
-            config['input_shape'][0], config['input_shape'][1]),
+            model.add(GRU(25, input_shape=(
+            config['input_shape']),
                            return_sequences=True))
         model.add(Flatten())
         model.add(Dropout(config['dropout']))
@@ -245,7 +246,7 @@ class VanillaCNN(SequentialModel):
         optimizer = Adam(learning_rate=lr, beta_1=0.9, beta_2=0.999,
                          amsgrad=False, epsilon=1e-8, decay=decay)
         model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
-        model.summary()
+        print(model.summary())
         print("Model compiled.")
         
     def train(self, x, y, x_val, y_val, config, save_dir):
@@ -309,7 +310,8 @@ class CNN4LayerGRU(SequentialModel):
 
         # Output layer with Softmax activation 
         model.add(Dense(4, activation='softmax')) # Output FC layer with softmax activation
-        model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=lr), metrics=['accuracy'])
+        model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=lr, beta_1=0.9, beta_2=0.999,
+                         amsgrad=False), metrics=['accuracy'])
         
         model.summary()
         print("Model compiled.")
@@ -373,7 +375,8 @@ class CNN4LayerLSTM(SequentialModel):
 
         # Output layer with Softmax activation 
         model.add(Dense(4, activation='softmax')) # Output FC layer with softmax activation
-        model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=lr), metrics=['accuracy'])
+        model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=lr, beta_1=0.9, beta_2=0.999,
+                         amsgrad=False), metrics=['accuracy'])
         
         model.summary()
         print("Model compiled.")
@@ -392,8 +395,6 @@ class CNN4LayerLSTM(SequentialModel):
 
         return history
     
-
-class CNN2LayerLSTM(SequentialModel):
     def __init__(self):
         super(CNN2LayerLSTM, self).__init__()
         
@@ -451,7 +452,6 @@ class CNN2LayerLSTM(SequentialModel):
         return history
     
 
-class CNN2LayerGRU(SequentialModel):
     def __init__(self):
         super(CNN2LayerGRU, self).__init__()
         
@@ -517,9 +517,9 @@ class CNN2LayerGRU(SequentialModel):
         return history
     
 
-class ConvLSTMAvgPool(SequentialModel):
+class ConvLSTM(SequentialModel):
     def __init__(self):
-        super(ConvLSTMAvgPool, self).__init__()
+        super(ConvLSTM, self).__init__()
 
     def build_model(self, config):
         model = self.model
@@ -569,7 +569,7 @@ class ConvLSTMAvgPool(SequentialModel):
 
     def train(self, x, y, x_val, y_val, config, save_dir):
         ensure_dir(save_dir)
-        file_path = join(save_dir, 'ConvLSTMAvgPool.keras')
+        file_path = join(save_dir, 'ConvLSTM.keras')
         cp_callback = ModelCheckpoint(filepath=file_path,
                                       monitor='val_accuracy',
                                       save_best_only=True,
@@ -581,7 +581,6 @@ class ConvLSTMAvgPool(SequentialModel):
 
         return history
         
-class ConvGRUAvgPool(SequentialModel):
     def __init__(self):
         super(ConvGRUAvgPool, self).__init__()
 
@@ -633,7 +632,107 @@ class ConvGRUAvgPool(SequentialModel):
 
     def train(self, x, y, x_val, y_val, config, save_dir):
         ensure_dir(save_dir)
-        file_path = join(save_dir, 'ConvLSTMAvgPool.keras')
+        file_path = join(save_dir, 'ConvGRUAvgPool.keras')
+        cp_callback = ModelCheckpoint(filepath=file_path,
+                                      monitor='val_accuracy',
+                                      save_best_only=True,
+                                      mode='max', verbose=0)
+
+        history = self.model.fit(x, y, epochs=config['epochs'], batch_size=config['batch_size'],
+                                 validation_data=(x_val, y_val), shuffle=True,
+                                 callbacks=[cp_callback])
+
+        return history
+    
+class SpatialConvNet(SequentialModel):
+    def __init__(self):
+        super(SpatialConvNet, self).__init__()
+
+    def build_model(self, config):
+        model = self.model
+
+        input_shape = config["input_shape"]
+        lr = config.get('lr', 0.001)
+        #decay = config.get("decay", 0.01)
+
+        # Conv. block 1
+        model.add(Conv2D(filters=128, kernel_size=(1,11), padding='same', activation='selu', input_shape=input_shape, kernel_regularizer=L1L2(l1=0, l2=0.01)))
+        model.add(Conv2D(filters=128, kernel_size=(1,12), padding='same', activation='selu', kernel_regularizer=L1L2(l1=0, l2=0.01)))
+        model.add(BatchNormalization())
+        model.add(SpatialDropout2D(0.6))
+
+        # Conv. block 2
+        model.add(Conv2D(filters=64, kernel_size=(24,1), padding='same', activation='selu', kernel_regularizer=L1L2(l1=0, l2=0.01)))
+        model.add(Conv2D(filters=64, kernel_size=(24,1), padding='same', activation='selu', kernel_regularizer=L1L2(l1=0, l2=0.01)))
+        model.add(Conv2D(filters=64, kernel_size=(24,1), padding='same', activation='selu', kernel_regularizer=L1L2(l1=0, l2=0.01)))
+        model.add(Conv2D(filters=64, kernel_size=(24,1), padding='same', activation='selu', kernel_regularizer=L1L2(l1=0, l2=0.01)))
+
+        # Conv. block 3
+        model.add(BatchNormalization())
+        model.add(AveragePooling2D(pool_size=(20,1), padding='same'))
+        model.add(SpatialDropout2D(0.6))
+        model.add(Reshape((13,64))) 
+        model.add(Bidirectional(LSTM(76, kernel_regularizer=L1L2(l1=0, l2=0.01), dropout=0.6, return_sequences=True, implementation =2)))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.6))
+        model.add(Flatten())
+
+        # Output layer with Softmax activation 
+        model.add(Dense(4, activation='softmax')) # Output FC layer with softmax activation
+
+        model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=lr), metrics=['accuracy'])
+
+        # Printing the model summary
+        print(model.summary())
+        print("Model compiled.")
+
+    def train(self, x, y, x_val, y_val, config, save_dir):
+        ensure_dir(save_dir)
+        file_path = join(save_dir, 'SpacialConvNet.keras')
+        cp_callback = ModelCheckpoint(filepath=file_path,
+                                      monitor='val_accuracy',
+                                      save_best_only=True,
+                                      mode='max', verbose=0)
+
+        history = self.model.fit(x, y, epochs=config['epochs'], batch_size=config['batch_size'],
+                                 validation_data=(x_val, y_val), shuffle=True,
+                                 callbacks=[cp_callback])
+
+        return history
+    
+
+class ShallowConvNet(SequentialModel):
+    def __init__(self):
+        super(ShallowConvNet, self).__init__()
+
+    def build_model(self, config):
+        model = self.model
+        input_shape = config["input_shape"]
+        lr = config.get('lr', 0.001)
+
+        # Convolutional layer 1
+        model.add(Conv2D(40, (10,10), strides=1, padding='same', input_shape = input_shape))
+
+        # Convolutional layer 2
+        model.add(Conv2D(40, (15,15), strides=1, padding='same'))
+        model.add(BatchNormalization())
+
+        model.add(Lambda(lambda x: x**2))
+        model.add(AveragePooling2D(pool_size=(35,1), strides = (7,1)))
+        model.add(Lambda(lambda x: K.log(x)))
+        model.add(Dropout(0.5))
+        model.add(Flatten())
+        model.add(Dense(4, activation='softmax'))
+
+        model.compile(loss='categorical_crossentropy', optimizer=Adam(learning_rate=lr), metrics=['accuracy'])
+
+        # Printing the model summary
+        model.summary()
+        print("Model compiled.")
+
+    def train(self, x, y, x_val, y_val, config, save_dir):
+        ensure_dir(save_dir)
+        file_path = join(save_dir, 'ShallowConvNet.keras')
         cp_callback = ModelCheckpoint(filepath=file_path,
                                       monitor='val_accuracy',
                                       save_best_only=True,
